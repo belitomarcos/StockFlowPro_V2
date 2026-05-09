@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { createClient } from '@supabase/supabase-js';
 import { Toaster, toast } from 'sonner';
 import { 
-  Package, Plus, Minus, Trash2, Database, X, Server, Settings, ArrowLeft, Users, MapPin, Search, History, ArrowDownRight, ArrowUpRight, AlertCircle, BarChart as BarChartIcon, Printer, FileText, Edit2, Download, Camera, LayoutDashboard
+  Package, Plus, Minus, Trash2, Database, X, Server, Settings, ArrowLeft, Users, MapPin, Search, History, ArrowDownRight, ArrowUpRight, AlertCircle, BarChart as BarChartIcon, Printer, FileText, Edit2, Download, Camera, LayoutDashboard, ShoppingCart, CheckCircle, Save, XCircle, ShoppingBag, PlusCircle
 } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Cell, PieChart, Pie } from 'recharts';
 import { BarcodeScanner } from './BarcodeScanner';
@@ -43,13 +43,25 @@ type Movimentacao = {
   tecnicos?: { nome: string };
 };
 
+type Compra = {
+  id: string;
+  produto_id?: string | number | null;
+  nome: string;
+  quantidade: number;
+  status: 'Pendente' | 'Pedido Feito' | 'Entregue';
+};
+
 export default function App() {
   const [produtos, setProdutos] = useState<Produto[]>([]);
   const [destinos, setDestinos] = useState<Destino[]>([]);
   const [tecnicos, setTecnicos] = useState<Tecnico[]>([]);
   const [historico, setHistorico] = useState<Movimentacao[]>([]);
   const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState<'inventario' | 'historico' | 'config' | 'relatorios' | 'dashboard'>('dashboard');
+  const [compras, setCompras] = useState<Compra[]>(() => {
+    const saved = localStorage.getItem('@stockflowpro/compras');
+    return saved ? JSON.parse(saved) : [];
+  });
+  const [activeTab, setActiveTab] = useState<'inventario' | 'historico' | 'config' | 'relatorios' | 'dashboard' | 'compras'>('dashboard');
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedDestinoId, setSelectedDestinoId] = useState<string>('');
   const [selectedTecnicoId, setSelectedTecnicoId] = useState<string>('');
@@ -108,6 +120,8 @@ export default function App() {
 
   // Modals state
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
+  const [isCompraModalOpen, setIsCompraModalOpen] = useState(false);
+  const [editingCompra, setEditingCompra] = useState<Compra | null>(null);
   const [editingProduto, setEditingProduto] = useState<Produto | null>(null);
   const [actionModal, setActionModal] = useState<{ isOpen: boolean, type: 'entrada' | 'saida', produto: Produto | null }>({
     isOpen: false,
@@ -152,6 +166,43 @@ export default function App() {
   useEffect(() => {
     fetchData();
   }, []);
+
+  useEffect(() => {
+    localStorage.setItem('@stockflowpro/compras', JSON.stringify(compras));
+  }, [compras]);
+
+  const gerarSugestoesCompras = () => {
+    const produtosParaReposicao = produtos.filter(p => p.est_minimo != null && p.quantidade <= p.est_minimo);
+    
+    setCompras(prev => {
+      const novas = [...prev];
+      let added = 0;
+      
+      for (const p of produtosParaReposicao) {
+        // Verifica se já existe compra não entregue para este produto
+        const jaExiste = novas.some(c => c.produto_id === String(p.id) && c.status !== 'Entregue');
+        if (!jaExiste) {
+          const sugestaoAuto = (p.est_minimo || 0) * 2 - p.quantidade;
+          novas.push({
+            id: crypto.randomUUID(),
+            produto_id: String(p.id),
+            nome: p.nome,
+            quantidade: sugestaoAuto > 0 ? sugestaoAuto : 1,
+            status: 'Pendente'
+          });
+          added++;
+        }
+      }
+      
+      if (added > 0) {
+        toast.success(`${added} nova(s) sugestão(ões) adicionada(s)!`);
+      } else {
+        toast.info('Nenhuma nova sugestão no momento.');
+      }
+      
+      return novas;
+    });
+  };
 
   const handleExcluir = async (id: string | number) => {
     if (!supabase) return;
@@ -425,26 +476,18 @@ export default function App() {
   };
 
   const handleDownloadCSV = () => {
-    const produtosParaReposicao = produtos.filter(p => p.est_minimo != null && p.quantidade <= p.est_minimo);
-    
-    if (produtosParaReposicao.length === 0) {
-      toast.info('Nenhum produto em nível crítico para gerar relatório.');
+    if (compras.length === 0) {
+      toast.info('Nenhuma sugestão de compra na lista para exportar.');
       return;
     }
 
-    const headers = ['Produto', 'Cód', 'Saldo Atual', 'Estoque Mínimo', 'Sugestão de Compra'];
-    const rows = produtosParaReposicao.map(produto => {
-      const codigoSeq = produtos.findIndex(p => p.id === produto.id) + 1;
-      const estMinimo = produto.est_minimo || 0;
-      const gap = estMinimo * 2 - produto.quantidade;
-      const sugestao = Math.max(gap, 1);
-      
+    const headers = ['Protocolo ID', 'Produto', 'Quantidade Sugerida', 'Status'];
+    const rows = compras.map(compra => {
       return [
-        `"${produto.nome.replace(/"/g, '""')}"`,
-        codigoSeq,
-        produto.quantidade,
-        estMinimo,
-        sugestao
+        compra.id.substring(0, 8),
+        `"${compra.nome.replace(/"/g, '""')}"`,
+        compra.quantidade,
+        compra.status
       ].join(';');
     });
 
@@ -453,7 +496,7 @@ export default function App() {
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
-    link.setAttribute('download', 'relatorio_reposicao.csv');
+    link.setAttribute('download', 'gestao_compras.csv');
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
@@ -540,12 +583,12 @@ export default function App() {
             </button>
 
             <button 
-              onClick={() => setActiveTab('relatorios')}
-              className={`px-3 py-2 sm:px-4 sm:py-2 rounded-lg flex items-center space-x-2 transition-colors duration-200 ${activeTab === 'relatorios' ? 'bg-indigo-500/10 text-indigo-400' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'}`}
-              title="Relatórios"
+              onClick={() => setActiveTab('compras')}
+              className={`px-3 py-2 sm:px-4 sm:py-2 rounded-lg flex items-center space-x-2 transition-colors duration-200 ${activeTab === 'compras' ? 'bg-indigo-500/10 text-indigo-400' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'}`}
+              title="Gestão de Compras"
             >
-              <FileText size={18} />
-              <span className="hidden sm:inline font-medium">Relatórios</span>
+              <ShoppingCart size={18} />
+              <span className="hidden sm:inline font-medium">Gestão de Compras</span>
             </button>
 
             <button 
@@ -684,16 +727,23 @@ export default function App() {
               </div>
             </div>
           </div>
-        ) : activeTab === 'relatorios' ? (
+        ) : activeTab === 'compras' ? (
           <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-6 shadow-sm print:bg-white print:border-none print:shadow-none print:p-0">
-            <div className="flex items-center justify-between mb-6 print:hidden">
+            <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between mb-6 print:hidden gap-4">
               <div className="flex items-center space-x-3">
                 <div className="bg-indigo-500/10 p-2 rounded-lg text-indigo-400">
-                  <FileText size={20} />
+                  <ShoppingCart size={20} />
                 </div>
-                <h2 className="text-lg font-semibold text-slate-200">Relatório de Reposição</h2>
+                <h2 className="text-lg font-semibold text-slate-200">Gestão de Compras</h2>
               </div>
-              <div className="flex items-center gap-3">
+              <div className="flex flex-wrap items-center gap-3">
+                <button 
+                  onClick={gerarSugestoesCompras}
+                  className="flex items-center gap-2 bg-indigo-500/10 hover:bg-indigo-500/20 text-indigo-400 px-4 py-2 rounded-lg font-medium transition-colors border border-indigo-500/20"
+                >
+                  <ShoppingCart size={18} />
+                  Sugerir do Estoque
+                </button>
                 <button 
                   onClick={handleDownloadCSV}
                   className="flex items-center gap-2 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 px-4 py-2 rounded-lg font-medium transition-colors border border-emerald-500/20"
@@ -703,76 +753,77 @@ export default function App() {
                 </button>
                 <button 
                   onClick={() => window.print()}
-                  className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white px-4 py-2 rounded-lg font-medium transition-colors"
+                  className="flex items-center gap-2 bg-slate-700 hover:bg-slate-600 text-white px-4 py-2 rounded-lg font-medium transition-colors"
                 >
                   <Printer size={18} />
-                  Gerar PDF / Imprimir
+                  Imprimir
+                </button>
+                <button 
+                  onClick={() => { setEditingCompra(null); setIsCompraModalOpen(true); }}
+                  className="flex items-center gap-2 bg-sky-500 hover:bg-sky-400 text-slate-950 px-4 py-2 rounded-lg font-medium transition-colors"
+                >
+                  <Plus size={18} />
+                  Adicionar Manual
                 </button>
               </div>
             </div>
 
             <div className="print-area">
-              <div className="hidden print:block mb-8">
-                <h1 className="text-2xl font-bold text-black mb-1">StockFlowPro - Relatório de Reposição</h1>
-                <p className="text-slate-600 text-sm">Data de Emissão: {new Date().toLocaleDateString('pt-BR')} às {new Date().toLocaleTimeString('pt-BR')}</p>
-              </div>
-
-              {(() => {
-                const produtosParaReposicao = produtos.filter(p => p.est_minimo != null && p.quantidade <= p.est_minimo);
-
-                if (produtosParaReposicao.length === 0) {
-                  return (
-                    <div className="flex flex-col items-center justify-center py-16 text-slate-500 print:text-slate-800">
-                      <Package size={48} className="mb-4 opacity-50" />
-                      <p className="text-lg font-medium">Nenhum produto precisando de reposição.</p>
-                      <p className="text-sm mt-1">Todos os itens estão acima do estoque mínimo.</p>
-                    </div>
-                  );
-                }
-
-                return (
-                  <div className="overflow-x-auto">
-                    <table className="w-full text-left border-collapse">
-                      <thead>
-                        <tr className="border-b border-slate-700/50 print:border-slate-300 text-slate-400 print:text-slate-600 text-sm">
-                          <th className="py-3 px-4 font-semibold">Ativo (Cód / SKU)</th>
-                          <th className="py-3 px-4 font-semibold text-right">Saldo Atual</th>
-                          <th className="py-3 px-4 font-semibold text-right">Estoque Mín.</th>
-                          <th className="py-3 px-4 font-semibold text-right text-indigo-400 print:text-indigo-600">Sugestão Compra</th>
+              {compras.length === 0 ? (
+                <div className="flex flex-col items-center justify-center py-16 text-slate-500">
+                  <Package size={48} className="mb-4 opacity-50" />
+                  <p className="text-lg font-medium">Nenhuma sugestão na lista.</p>
+                  <p className="text-sm mt-1">Gere sugestões automáticas ou adicione manualmente.</p>
+                </div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left border-collapse">
+                    <thead>
+                      <tr className="border-b border-slate-700/50 text-slate-400 text-sm">
+                        <th className="py-3 px-4 font-semibold">Produto</th>
+                        <th className="py-3 px-4 font-semibold text-right">Quantidade</th>
+                        <th className="py-3 px-4 font-semibold text-center">Status</th>
+                        <th className="py-3 px-4 text-center font-semibold text-slate-500 w-24">Ações</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {compras.map(compra => (
+                        <tr key={compra.id} className="border-b border-slate-700/50 last:border-0 hover:bg-slate-700/20 transition-colors">
+                          <td className="py-4 px-4 font-medium text-slate-200">{compra.nome}</td>
+                          <td className="py-4 px-4 text-right font-bold text-slate-200">{compra.quantidade} un</td>
+                          <td className="py-4 px-4 text-center">
+                            <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold ${
+                              compra.status === 'Entregue' ? 'bg-emerald-500/10 text-emerald-400' :
+                              compra.status === 'Pedido Feito' ? 'bg-sky-500/10 text-sky-400' :
+                              'bg-amber-500/10 text-amber-400'
+                            }`}>
+                              {compra.status}
+                            </span>
+                          </td>
+                          <td className="py-4 px-4 text-center">
+                            <div className="flex items-center justify-center gap-2">
+                               <button 
+                                onClick={() => { setEditingCompra(compra); setIsCompraModalOpen(true); }}
+                                className="p-1.5 text-slate-400 hover:text-sky-400 hover:bg-sky-500/10 rounded-md transition-colors"
+                                title="Editar"
+                              >
+                                <Edit2 size={16} />
+                              </button>
+                              <button 
+                                onClick={() => setCompras(prev => prev.filter(c => c.id !== compra.id))}
+                                className="p-1.5 text-slate-400 hover:text-red-400 hover:bg-red-500/10 rounded-md transition-colors"
+                                title="Excluir"
+                              >
+                                <Trash2 size={16} />
+                              </button>
+                            </div>
+                          </td>
                         </tr>
-                      </thead>
-                      <tbody>
-                        {produtosParaReposicao.map(produto => {
-                          const estMinimo = produto.est_minimo || 0;
-                          const gap = estMinimo * 2 - produto.quantidade;
-                          // Sugestão de compra: quantidade para atingir o dobro do mínimo
-                          const sugestao = Math.max(gap, 1);
-
-                          return (
-                            <tr key={produto.id} className="border-b border-slate-700/50 print:border-slate-200 last:border-0 hover:bg-slate-700/20 print:hover:bg-transparent transition-colors">
-                              <td className="py-4 px-4">
-                                <div className="font-medium text-slate-200 print:text-black">{produto.nome}</div>
-                                <div className="text-xs text-slate-500 print:text-slate-500 font-mono mt-0.5">
-                                  Cód: {produtos.findIndex(p => p.id === produto.id) + 1} {produto.sku ? `| SKU: ${produto.sku}` : ''}
-                                </div>
-                              </td>
-                              <td className="py-4 px-4 text-right">
-                                <span className="font-bold text-rose-400 print:text-rose-600 text-lg">{produto.quantidade}</span>
-                              </td>
-                              <td className="py-4 px-4 text-right font-medium text-slate-400 print:text-slate-600">
-                                {estMinimo}
-                              </td>
-                              <td className="py-4 px-4 text-right">
-                                <span className="font-bold text-indigo-400 print:text-indigo-600 text-lg">{sugestao} un</span>
-                              </td>
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
-                  </div>
-                );
-              })()}
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
             </div>
           </div>
         ) : activeTab === 'historico' ? (
@@ -995,16 +1046,7 @@ export default function App() {
           </div>
         ) : (
           <>
-            {/* Relatório Button */}
-            <div className="mb-6 flex justify-end">
-              <button
-                onClick={() => setActiveTab('relatorios')}
-                className="flex items-center gap-2 bg-indigo-500/10 hover:bg-indigo-500/20 text-indigo-400 px-4 py-2 rounded-lg font-medium transition-colors border border-indigo-500/20"
-              >
-                <FileText size={18} />
-                Gerar Lista de Compras
-              </button>
-            </div>
+            {/* Csv Export removed, handled in Compras */}
 
             {/* Search Bar */}
             <div className="mb-6 flex flex-col sm:flex-row gap-4">
@@ -1367,6 +1409,107 @@ export default function App() {
                   }`}
                 >
                   {isSubmitting ? 'Salvando...' : `Confirmar ${actionModal.type === 'entrada' ? 'Entrada' : 'Saída'}`}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+      {/* MODAL: Adicionar/Editar Compra */}
+      {isCompraModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm">
+          <div className="bg-slate-800 w-full max-w-md rounded-2xl border border-slate-700 shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-200">
+            <div className="flex items-center justify-between px-6 py-4 border-b border-slate-700 bg-slate-800/80 flex-shrink-0">
+              <h2 className="text-lg font-semibold text-slate-200">{editingCompra ? 'Editar Sugestão' : 'Nova Sugestão de Compra'}</h2>
+              <button 
+                onClick={() => setIsCompraModalOpen(false)} 
+                className="text-slate-400 hover:text-slate-200 transition-colors p-1"
+              >
+                <X size={20} />
+              </button>
+            </div>
+            <form onSubmit={(e) => {
+              e.preventDefault();
+              const formData = new FormData(e.currentTarget);
+              const nome = String(formData.get('nome'));
+              const quantidade = Number(formData.get('quantidade'));
+              const status = String(formData.get('status')) as 'Pendente' | 'Pedido Feito' | 'Entregue';
+
+              if (editingCompra) {
+                setCompras(prev => prev.map(c => c.id === editingCompra.id ? { ...c, nome, quantidade, status } : c));
+                toast.success('Sugestão atualizada!');
+              } else {
+                setCompras(prev => [...prev, {
+                  id: crypto.randomUUID(),
+                  nome,
+                  quantidade,
+                  status
+                }]);
+                toast.success('Sugestão adicionada!');
+              }
+              setIsCompraModalOpen(false);
+            }} className="p-6">
+              <div className="space-y-4 mb-6">
+                <div>
+                  <label className="block text-sm font-medium text-slate-400 mb-1.5" htmlFor="nome_compra">
+                    Nome do Produto
+                  </label>
+                  <input
+                    id="nome_compra"
+                    name="nome"
+                    required
+                    defaultValue={editingCompra ? editingCompra.nome : ''}
+                    placeholder="Ex: Teclado Preto USB"
+                    className="w-full bg-slate-900 border border-slate-700 rounded-lg px-4 py-3 text-slate-200 focus:outline-none focus:border-sky-500 focus:ring-1 focus:ring-sky-500 transition-all font-medium placeholder:text-slate-500"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-slate-400 mb-1.5" htmlFor="quantidade_compra">
+                    Quantidade Sugerida
+                  </label>
+                  <input
+                    id="quantidade_compra"
+                    name="quantidade"
+                    type="number"
+                    min="1"
+                    required
+                    defaultValue={editingCompra ? editingCompra.quantidade : 1}
+                    className="w-full bg-slate-900 border border-slate-700 rounded-lg px-4 py-3 text-slate-200 focus:outline-none focus:border-sky-500 focus:ring-1 focus:ring-sky-500 transition-all font-medium font-mono"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-slate-400 mb-1.5" htmlFor="status_compra">
+                    Status
+                  </label>
+                  <select 
+                    id="status_compra"
+                    name="status"
+                    required
+                    defaultValue={editingCompra ? editingCompra.status : 'Pendente'}
+                    className="w-full bg-slate-900 border border-slate-700 rounded-lg px-4 py-3 text-slate-200 focus:outline-none focus:border-sky-500 focus:ring-1 focus:ring-sky-500 transition-all font-medium appearance-none"
+                    style={{ backgroundImage: `url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 20 20'%3e%3cpath stroke='%236b7280' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.5' d='M6 8l4 4 4-4'/%3e%3c/svg%3e")`, backgroundPosition: `right 0.5rem center`, backgroundRepeat: `no-repeat`, backgroundSize: `1.5em 1.5em`, paddingRight: `2.5rem` }}
+                  >
+                    <option value="Pendente">Pendente</option>
+                    <option value="Pedido Feito">Pedido Feito</option>
+                    <option value="Entregue">Entregue</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="flex gap-3 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setIsCompraModalOpen(false)}
+                  className="flex-1 bg-slate-800 hover:bg-slate-700 text-slate-300 font-medium py-3 px-4 rounded-lg transition-colors border border-slate-700"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  className="flex-1 bg-sky-500 hover:bg-sky-400 text-slate-950 font-semibold py-3 px-4 rounded-lg transition-colors flex items-center justify-center space-x-2"
+                >
+                  <Save size={18} />
+                  <span>{editingCompra ? 'Salvar Alterações' : 'Adicionar Sugestão'}</span>
                 </button>
               </div>
             </form>
