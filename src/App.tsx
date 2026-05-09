@@ -1,10 +1,11 @@
-import { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { createClient } from '@supabase/supabase-js';
 import { Toaster, toast } from 'sonner';
 import { 
-  Package, Plus, Minus, Trash2, Database, X, Server, Settings, ArrowLeft, Users, MapPin, Search, History, ArrowDownRight, ArrowUpRight, AlertCircle, BarChart as BarChartIcon, Printer, FileText, Edit2
+  Package, Plus, Minus, Trash2, Database, X, Server, Settings, ArrowLeft, Users, MapPin, Search, History, ArrowDownRight, ArrowUpRight, AlertCircle, BarChart as BarChartIcon, Printer, FileText, Edit2, Download, Camera, LayoutDashboard
 } from 'lucide-react';
-import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Cell } from 'recharts';
+import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Cell, PieChart, Pie } from 'recharts';
+import { BarcodeScanner } from './BarcodeScanner';
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || '';
 const supabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY || '';
@@ -36,6 +37,7 @@ type Movimentacao = {
   destino_id?: string | number;
   tecnico_id?: string | number;
   created_at?: string;
+  data_movimentacao?: string;
   produtos?: { nome: string };
   destinos?: { nome: string };
   tecnicos?: { nome: string };
@@ -47,17 +49,23 @@ export default function App() {
   const [tecnicos, setTecnicos] = useState<Tecnico[]>([]);
   const [historico, setHistorico] = useState<Movimentacao[]>([]);
   const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState<'inventario' | 'historico' | 'config' | 'relatorios'>('inventario');
+  const [activeTab, setActiveTab] = useState<'inventario' | 'historico' | 'config' | 'relatorios' | 'dashboard'>('dashboard');
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedDestinoId, setSelectedDestinoId] = useState<string>('');
   const [selectedTecnicoId, setSelectedTecnicoId] = useState<string>('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isScannerOpen, setIsScannerOpen] = useState(false);
+  const [isRemovingDuplicates, setIsRemovingDuplicates] = useState(false);
   const isConfigured = supabaseUrl && supabaseKey;
 
   const topSaidasData = useMemo(() => {
     const thirtyDaysAgo = new Date();
     thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
 
-    const saidas = historico.filter(m => m.tipo === 'saida' && m.created_at && new Date(m.created_at) >= thirtyDaysAgo);
+    const saidas = historico.filter(m => {
+      const dataMov = m.data_movimentacao || m.created_at;
+      return m.tipo === 'saida' && dataMov && new Date(dataMov) >= thirtyDaysAgo;
+    });
     
     const aggregated: Record<string, number> = {};
     saidas.forEach(saida => {
@@ -73,6 +81,30 @@ export default function App() {
 
     return sorted;
   }, [historico, produtos]);
+
+  const saidasPorDestinoData = useMemo(() => {
+    const thirtyDaysAgo = new Date();
+    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+
+    const saidas = historico.filter(m => {
+      const dataMov = m.data_movimentacao || m.created_at;
+      return m.tipo === 'saida' && dataMov && new Date(dataMov) >= thirtyDaysAgo;
+    });
+    
+    const aggregated: Record<string, number> = {};
+    saidas.forEach(saida => {
+      let destName = 'Não Informado';
+      if (saida.destino_id) {
+         const dest = destinos.find(d => String(d.id) === String(saida.destino_id));
+         if (dest) destName = dest.nome;
+      }
+      aggregated[destName] = (aggregated[destName] || 0) + saida.quantidade;
+    });
+
+    return Object.entries(aggregated)
+      .map(([name, value]) => ({ name, value }))
+      .sort((a, b) => b.value - a.value);
+  }, [historico, destinos]);
 
   // Modals state
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
@@ -144,33 +176,48 @@ export default function App() {
 
     if (!supabase) return;
     
-    const payload = {
-      nome, 
-      quantidade,
-      sku: formData.get('sku') ? String(formData.get('sku')) : null,
-      est_minimo: formData.get('est_minimo') ? Number(formData.get('est_minimo')) : null
-    };
+    setIsSubmitting(true);
+    
+    try {
+      const nomeFormatado = nome.trim().toLowerCase();
+      const produtoExistente = produtos.find(p => p.nome.trim().toLowerCase() === nomeFormatado && (!editingProduto || p.id !== editingProduto.id));
+      
+      if (produtoExistente) {
+        toast.error('Este produto já está cadastrado!');
+        return;
+      }
 
-    if (editingProduto) {
-      const { error } = await supabase.from('produtos').update(payload).eq('id', editingProduto.id);
-      if (error) {
-        toast.error('Erro ao atualizar produto.');
-        console.error(error);
+      const payload = {
+        nome, 
+        quantidade,
+        sku: formData.get('sku') ? String(formData.get('sku')) : null,
+        est_minimo: formData.get('est_minimo') ? Number(formData.get('est_minimo')) : null
+      };
+
+      if (editingProduto) {
+        const { error } = await supabase.from('produtos').update(payload).eq('id', editingProduto.id);
+        if (error) {
+          toast.error('Erro ao atualizar produto.');
+          console.error(error);
+        } else {
+          toast.success('Produto atualizado com sucesso!');
+          setEditingProduto(null);
+          setIsAddModalOpen(false);
+          fetchData();
+        }
       } else {
-        toast.success('Produto atualizado com sucesso!');
-        setEditingProduto(null);
-        fetchData();
+        const { error } = await supabase.from('produtos').insert([payload]);
+        if (error) {
+          toast.error('Erro ao cadastrar produto.');
+          console.error(error);
+        } else {
+          toast.success('Produto cadastrado com sucesso!');
+          setIsAddModalOpen(false);
+          fetchData();
+        }
       }
-    } else {
-      const { error } = await supabase.from('produtos').insert([payload]);
-      if (error) {
-        toast.error('Erro ao cadastrar produto.');
-        console.error(error);
-      } else {
-        toast.success('Produto cadastrado com sucesso!');
-        setIsAddModalOpen(false);
-        fetchData();
-      }
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -207,41 +254,49 @@ export default function App() {
     }
 
     if (!supabase) return;
-    const { error } = await supabase
-      .from('produtos')
-      .update({ quantidade: nova_quantidade })
-      .eq('id', actionModal.produto.id);
+    
+    setIsSubmitting(true);
+    
+    try {
+      const { error } = await supabase
+        .from('produtos')
+        .update({ quantidade: nova_quantidade })
+        .eq('id', actionModal.produto.id);
 
-    if (error) {
-      toast.error(`Erro ao registrar ${actionModal.type}.`);
-      console.error(error);
-    } else {
-      // Salva cada operação na tabela movimentacao_estoque
-      const payload: any = {
-        produto_id: actionModal.produto.id,
-        tipo: actionModal.type,
-        quantidade: quantidade_digitada
-      };
+      if (error) {
+        toast.error(`Erro ao registrar ${actionModal.type}.`);
+        console.error(error);
+      } else {
+        // Salva cada operação na tabela movimentacao_estoque
+        const payload: any = {
+          produto_id: actionModal.produto.id,
+          tipo: actionModal.type,
+          quantidade: quantidade_digitada,
+          data_movimentacao: new Date().toISOString()
+        };
 
-      if (actionModal.type === 'saida') {
-        payload.destino_id = selectedDestinoId;
-        payload.tecnico_id = selectedTecnicoId;
+        if (actionModal.type === 'saida') {
+          payload.destino_id = selectedDestinoId;
+          payload.tecnico_id = selectedTecnicoId;
+        }
+
+        const { error: historyError } = await supabase
+          .from('movimentacao_estoque')
+          .insert([payload]);
+
+        if (historyError) {
+          console.error('Erro ao registrar histórico', historyError);
+          toast.error(`Aviso: O estoque foi alterado, mas houve erro ao salvar no histórico.`);
+        }
+
+        toast.success(`${actionModal.type === 'entrada' ? 'Entrada' : 'Saída'} registrada com sucesso.`);
+        setActionModal({ isOpen: false, type: 'entrada', produto: null });
+        setSelectedDestinoId('');
+        setSelectedTecnicoId('');
+        await fetchData(); // Force reload
       }
-
-      const { error: historyError } = await supabase
-        .from('movimentacao_estoque')
-        .insert([payload]);
-
-      if (historyError) {
-        console.error('Erro ao registrar histórico', historyError);
-        toast.error(`Aviso: O estoque foi alterado, mas houve erro ao salvar no histórico.`);
-      }
-
-      toast.success(`${actionModal.type === 'entrada' ? 'Entrada' : 'Saída'} registrada com sucesso.`);
-      setActionModal({ isOpen: false, type: 'entrada', produto: null });
-      setSelectedDestinoId('');
-      setSelectedTecnicoId('');
-      await fetchData(); // Force reload
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -301,6 +356,109 @@ export default function App() {
     }
   };
 
+  const handleRemoveDuplicates = async () => {
+    if (!supabase) return;
+    setIsRemovingDuplicates(true);
+    try {
+      const { data: allProducts, error } = await supabase.from('produtos').select('*');
+      if (error) throw error;
+
+      // Group by normalized name
+      const grouped: Record<string, typeof allProducts> = {};
+      for (const p of allProducts) {
+        const key = p.nome.trim().toLowerCase();
+        if (!grouped[key]) grouped[key] = [];
+        grouped[key].push(p);
+      }
+
+      let removedCount = 0;
+
+      for (const key in grouped) {
+        const group = grouped[key];
+        if (group.length > 1) {
+          // Sort to keep the oldest created item
+          group.sort((a, b) => {
+            const timeA = a.created_at ? new Date(a.created_at).getTime() : 0;
+            const timeB = b.created_at ? new Date(b.created_at).getTime() : 0;
+            return timeA - timeB;
+          });
+          const keep = group[0];
+          const toRemove = group.slice(1);
+
+          let quantityToAdd = 0;
+          const idsToDelete = [];
+
+          for (const duplicate of toRemove) {
+            quantityToAdd += duplicate.quantidade;
+            idsToDelete.push(duplicate.id);
+          }
+
+          // Update main item quantity if any
+          if (quantityToAdd > 0) {
+            await supabase.from('produtos').update({ quantidade: keep.quantidade + quantityToAdd }).eq('id', keep.id);
+          }
+
+          // Reassign history and delete duplicates
+          if (idsToDelete.length > 0) {
+            for (const dupId of idsToDelete) {
+               await supabase.from('movimentacao_estoque').update({ produto_id: keep.id }).eq('produto_id', dupId);
+            }
+            await supabase.from('produtos').delete().in('id', idsToDelete);
+            removedCount += idsToDelete.length;
+          }
+        }
+      }
+
+      if (removedCount > 0) {
+        toast.success(`${removedCount} produto(s) duplicado(s) removido(s).`);
+        await fetchData();
+      } else {
+        toast.info('Nenhum produto duplicado foi encontrado.');
+      }
+
+    } catch (e) {
+      console.error(e);
+      toast.error('Erro durante a limpeza de duplicados.');
+    } finally {
+      setIsRemovingDuplicates(false);
+    }
+  };
+
+  const handleDownloadCSV = () => {
+    const produtosParaReposicao = produtos.filter(p => p.est_minimo != null && p.quantidade <= p.est_minimo);
+    
+    if (produtosParaReposicao.length === 0) {
+      toast.info('Nenhum produto em nível crítico para gerar relatório.');
+      return;
+    }
+
+    const headers = ['Produto', 'Cód', 'Saldo Atual', 'Estoque Mínimo', 'Sugestão de Compra'];
+    const rows = produtosParaReposicao.map(produto => {
+      const codigoSeq = produtos.findIndex(p => p.id === produto.id) + 1;
+      const estMinimo = produto.est_minimo || 0;
+      const gap = estMinimo * 2 - produto.quantidade;
+      const sugestao = Math.max(gap, 1);
+      
+      return [
+        `"${produto.nome.replace(/"/g, '""')}"`,
+        codigoSeq,
+        produto.quantidade,
+        estMinimo,
+        sugestao
+      ].join(';');
+    });
+
+    const csvContent = [headers.join(';'), ...rows].join('\n');
+    const blob = new Blob(["\uFEFF", csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.setAttribute('download', 'relatorio_reposicao.csv');
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
   if (!isConfigured) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-[#0f172a] text-slate-100 p-6">
@@ -327,7 +485,7 @@ export default function App() {
       
       {/* Navbar Superior */}
       <header className="border-b border-slate-800 bg-slate-900/50 backdrop-blur-sm sticky top-0 z-10">
-        <div className="max-w-6xl mx-auto px-6 h-16 flex items-center justify-between">
+        <div className="max-w-full mx-auto px-6 h-16 flex items-center justify-between">
           <div className="flex items-center space-x-3">
             <div className="bg-sky-500/10 p-2 rounded-lg text-sky-400">
               <Server size={24} />
@@ -336,15 +494,33 @@ export default function App() {
           </div>
           <div className="flex items-center space-x-2 sm:space-x-4">
             {activeTab === 'inventario' && (
-              <button 
-                onClick={() => setIsAddModalOpen(true)}
-                className="bg-sky-500 hover:bg-sky-400 text-slate-950 font-semibold px-4 py-2 rounded-lg flex items-center space-x-2 transition-colors duration-200"
-              >
-                <Plus size={18} />
-                <span className="hidden sm:inline">Novo Ativo</span>
-              </button>
+              <>
+                <button 
+                  onClick={() => setIsScannerOpen(true)}
+                  className="bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 font-semibold px-4 py-2 rounded-lg flex items-center space-x-2 transition-colors duration-200 border border-emerald-500/20"
+                >
+                  <Camera size={18} />
+                  <span className="hidden sm:inline">Escanear</span>
+                </button>
+                <button 
+                  onClick={() => setIsAddModalOpen(true)}
+                  className="bg-sky-500 hover:bg-sky-400 text-slate-950 font-semibold px-4 py-2 rounded-lg flex items-center space-x-2 transition-colors duration-200"
+                >
+                  <Plus size={18} />
+                  <span className="hidden sm:inline">Novo Ativo</span>
+                </button>
+              </>
             )}
             
+            <button 
+              onClick={() => setActiveTab('dashboard')}
+              className={`px-3 py-2 sm:px-4 sm:py-2 rounded-lg flex items-center space-x-2 transition-colors duration-200 ${activeTab === 'dashboard' ? 'bg-sky-500/10 text-sky-400' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'}`}
+              title="Dashboard"
+            >
+              <LayoutDashboard size={18} />
+              <span className="hidden sm:inline font-medium">Dashboard</span>
+            </button>
+
             <button 
               onClick={() => setActiveTab('inventario')}
               className={`px-3 py-2 sm:px-4 sm:py-2 rounded-lg flex items-center space-x-2 transition-colors duration-200 ${activeTab === 'inventario' ? 'bg-sky-500/10 text-sky-400' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'}`}
@@ -385,8 +561,130 @@ export default function App() {
       </header>
 
       {/* Conteúdo Principal */}
-      <main className="max-w-6xl mx-auto px-6 py-8 print:p-0 print:m-0 print:max-w-none">
-        {activeTab === 'relatorios' ? (
+      <main className="max-w-full mx-auto px-6 py-8 print:p-0 print:m-0 print:max-w-none">
+        {activeTab === 'dashboard' ? (
+          <div className="space-y-6">
+            {/* Dashboard Cards de Resumo */}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-6">
+              <div className="bg-slate-800/50 border border-slate-700/50 rounded-xl p-4 flex items-center space-x-4 shadow-sm">
+                <div className="bg-sky-500/10 p-3 rounded-lg text-sky-400">
+                  <Package size={24} />
+                </div>
+                <div>
+                  <p className="text-sm text-slate-400 font-medium tracking-wide">Total de Itens</p>
+                  <h3 className="text-2xl font-bold text-slate-200">
+                    {produtos.reduce((acc, p) => acc + p.quantidade, 0)} <span className="text-sm font-normal text-slate-500 ml-1">em estoque</span>
+                  </h3>
+                </div>
+              </div>
+              
+              <div className="bg-slate-800/50 border border-slate-700/50 rounded-xl p-4 flex items-center space-x-4 shadow-sm">
+                <div className="bg-red-500/10 p-3 rounded-lg text-red-400">
+                  <AlertCircle size={24} />
+                </div>
+                <div>
+                  <p className="text-sm text-slate-400 font-medium tracking-wide">Alertas Críticos</p>
+                  <h3 className="text-2xl font-bold text-red-400">
+                    {produtos.filter(p => p.est_minimo != null && p.quantidade <= p.est_minimo).length} <span className="text-sm font-normal text-slate-500 ml-1">produtos</span>
+                  </h3>
+                </div>
+              </div>
+
+              <div className="bg-slate-800/50 border border-slate-700/50 rounded-xl p-4 flex items-center space-x-4 shadow-sm">
+                <div className="bg-rose-500/10 p-3 rounded-lg text-rose-400">
+                  <ArrowDownRight size={24} />
+                </div>
+                <div className="overflow-hidden">
+                  <p className="text-sm text-slate-400 font-medium tracking-wide">Última Saída</p>
+                  <h3 className="text-base font-bold text-slate-200 truncate" title={(() => {
+                    const last = historico.find(m => m.tipo === 'saida');
+                    if (!last) return 'Nenhuma';
+                    const p = produtos.find(p => p.id === last.produto_id);
+                    return p ? p.nome : `ID: ${last.produto_id}`;
+                  })()}>
+                    {(() => {
+                      const last = historico.find(m => m.tipo === 'saida');
+                      if (!last) return 'Nenhuma';
+                      const p = produtos.find(p => p.id === last.produto_id);
+                      return p ? p.nome : `Produto Excluído`;
+                    })()}
+                  </h3>
+                </div>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              {/* Gráfico de Barras - Top Saídas */}
+              <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-6 shadow-sm">
+                <div className="flex items-center space-x-3 mb-6">
+                  <div className="bg-rose-500/10 p-2 rounded-lg text-rose-400">
+                    <BarChartIcon size={20} />
+                  </div>
+                  <h2 className="text-lg font-semibold text-slate-200">Top 5 Produtos em Saída (30 dias)</h2>
+                </div>
+                {topSaidasData.length > 0 ? (
+                  <div className="h-64 w-full">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <BarChart data={topSaidasData} layout="vertical" margin={{ top: 5, right: 30, left: 20, bottom: 5 }}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#334155" horizontal={true} vertical={false} />
+                        <XAxis type="number" stroke="#94a3b8" />
+                        <YAxis dataKey="name" type="category" width={120} stroke="#94a3b8" tick={{ fill: '#cbd5e1', fontSize: 12 }} />
+                        <Tooltip 
+                          contentStyle={{ backgroundColor: '#1e293b', border: '1px solid #334155', borderRadius: '0.5rem' }} 
+                          itemStyle={{ color: '#f43f5e' }} 
+                        />
+                        <Bar dataKey="quantidade" fill="#fb7185" radius={[0, 4, 4, 0]}>
+                          {topSaidasData.map((entry, index) => (
+                            <Cell key={`cell-${index}`} fill={['#fb7185', '#f43f5e', '#e11d48', '#be123c', '#9f1239'][index % 5]} />
+                          ))}
+                        </Bar>
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
+                ) : (
+                  <p className="text-slate-500 text-center py-8">Nenhuma saída registrada.</p>
+                )}
+              </div>
+
+              {/* Gráfico de Pizza - Destinos */}
+              <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-6 shadow-sm">
+                <div className="flex items-center space-x-3 mb-6">
+                  <div className="bg-emerald-500/10 p-2 rounded-lg text-emerald-400">
+                    <LayoutDashboard size={20} />
+                  </div>
+                  <h2 className="text-lg font-semibold text-slate-200">Distribuição de Saídas (30 dias)</h2>
+                </div>
+                {saidasPorDestinoData.length > 0 ? (
+                  <div className="h-64 w-full">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <PieChart>
+                        <Pie
+                          data={saidasPorDestinoData}
+                          cx="50%"
+                          cy="50%"
+                          labelLine={false}
+                          label={({ name, percent }) => `${name} (${(percent * 100).toFixed(0)}%)`}
+                          outerRadius={90}
+                          fill="#8884d8"
+                          dataKey="value"
+                        >
+                          {saidasPorDestinoData.map((entry, index) => (
+                            <Cell key={`cell-${index}`} fill={['#10b981', '#059669', '#047857', '#34d399', '#6ee7b7'][index % 5]} />
+                          ))}
+                        </Pie>
+                        <Tooltip 
+                          contentStyle={{ backgroundColor: '#1e293b', border: '1px solid #334155', borderRadius: '0.5rem' }} 
+                        />
+                      </PieChart>
+                    </ResponsiveContainer>
+                  </div>
+                ) : (
+                  <p className="text-slate-500 text-center py-8">Nenhuma saída registrada.</p>
+                )}
+              </div>
+            </div>
+          </div>
+        ) : activeTab === 'relatorios' ? (
           <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-6 shadow-sm print:bg-white print:border-none print:shadow-none print:p-0">
             <div className="flex items-center justify-between mb-6 print:hidden">
               <div className="flex items-center space-x-3">
@@ -395,13 +693,22 @@ export default function App() {
                 </div>
                 <h2 className="text-lg font-semibold text-slate-200">Relatório de Reposição</h2>
               </div>
-              <button 
-                onClick={() => window.print()}
-                className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white px-4 py-2 rounded-lg font-medium transition-colors"
-              >
-                <Printer size={18} />
-                Gerar PDF / Imprimir
-              </button>
+              <div className="flex items-center gap-3">
+                <button 
+                  onClick={handleDownloadCSV}
+                  className="flex items-center gap-2 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 px-4 py-2 rounded-lg font-medium transition-colors border border-emerald-500/20"
+                >
+                  <Download size={18} />
+                  Baixar Excel (CSV)
+                </button>
+                <button 
+                  onClick={() => window.print()}
+                  className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white px-4 py-2 rounded-lg font-medium transition-colors"
+                >
+                  <Printer size={18} />
+                  Gerar PDF / Imprimir
+                </button>
+              </div>
             </div>
 
             <div className="print-area">
@@ -428,7 +735,7 @@ export default function App() {
                     <table className="w-full text-left border-collapse">
                       <thead>
                         <tr className="border-b border-slate-700/50 print:border-slate-300 text-slate-400 print:text-slate-600 text-sm">
-                          <th className="py-3 px-4 font-semibold">Ativo (ID / SKU)</th>
+                          <th className="py-3 px-4 font-semibold">Ativo (Cód / SKU)</th>
                           <th className="py-3 px-4 font-semibold text-right">Saldo Atual</th>
                           <th className="py-3 px-4 font-semibold text-right">Estoque Mín.</th>
                           <th className="py-3 px-4 font-semibold text-right text-indigo-400 print:text-indigo-600">Sugestão Compra</th>
@@ -446,7 +753,7 @@ export default function App() {
                               <td className="py-4 px-4">
                                 <div className="font-medium text-slate-200 print:text-black">{produto.nome}</div>
                                 <div className="text-xs text-slate-500 print:text-slate-500 font-mono mt-0.5">
-                                  ID: {produto.id} {produto.sku ? `| SKU: ${produto.sku}` : ''}
+                                  Cód: {produtos.findIndex(p => p.id === produto.id) + 1} {produto.sku ? `| SKU: ${produto.sku}` : ''}
                                 </div>
                               </td>
                               <td className="py-4 px-4 text-right">
@@ -530,9 +837,10 @@ export default function App() {
                     const destinoNome = mov.destinos?.nome || destinos.find(d => String(d.id) === String(mov.destino_id))?.nome;
                     const tecnicoNome = mov.tecnicos?.nome || tecnicos.find(t => String(t.id) === String(mov.tecnico_id))?.nome;
                     
+                    const dataMov = mov.data_movimentacao || mov.created_at;
                     let dataFormatada = new Date().toLocaleString('pt-BR');
-                    if (mov.created_at) {
-                      dataFormatada = new Date(mov.created_at).toLocaleString('pt-BR');
+                    if (dataMov) {
+                      dataFormatada = new Date(dataMov).toLocaleString('pt-BR');
                     }
 
                     return (
@@ -654,6 +962,31 @@ export default function App() {
                 )}
               </div>
             </div>
+            {/* Ferramentas de Banco de Dados */}
+            <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-6 md:col-span-2">
+              <div className="flex items-center space-x-3 mb-6">
+                <div className="bg-emerald-500/10 p-2 rounded-lg text-emerald-400">
+                  <Database size={20} />
+                </div>
+                <h2 className="text-lg font-semibold text-slate-200">Manutenção do Banco de Dados</h2>
+              </div>
+              
+              <div className="p-4 bg-slate-900/50 border border-slate-700/50 rounded-lg flex items-center justify-between">
+                <div>
+                  <h3 className="font-medium text-slate-200">Limpeza Automática de Duplicados</h3>
+                  <p className="text-sm text-slate-400 mt-1 max-w-xl">
+                    Busca produtos com nomes idênticos. Mantém o registro mais antigo, transfere o saldo dos duplicados para o principal e exclui os extras.
+                  </p>
+                </div>
+                <button
+                  onClick={handleRemoveDuplicates}
+                  disabled={isRemovingDuplicates}
+                  className="bg-emerald-600 hover:bg-emerald-500 text-white px-4 py-2 rounded-lg font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
+                >
+                  {isRemovingDuplicates ? 'Limpando...' : 'Remover Duplicados'}
+                </button>
+              </div>
+            </div>
           </div>
         ) : loading ? (
           <div className="flex items-center justify-center h-64 text-slate-500 space-x-3">
@@ -662,55 +995,6 @@ export default function App() {
           </div>
         ) : (
           <>
-            {/* Dashboard Cards de Resumo */}
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6">
-              <div className="bg-slate-800/50 border border-slate-700/50 rounded-xl p-4 flex items-center space-x-4 shadow-sm">
-                <div className="bg-sky-500/10 p-3 rounded-lg text-sky-400">
-                  <Package size={24} />
-                </div>
-                <div>
-                  <p className="text-sm text-slate-400 font-medium tracking-wide">Total de Itens</p>
-                  <h3 className="text-2xl font-bold text-slate-200">
-                    {produtos.reduce((acc, p) => acc + p.quantidade, 0)} <span className="text-sm font-normal text-slate-500 ml-1">em estoque</span>
-                  </h3>
-                </div>
-              </div>
-              
-              <div className="bg-slate-800/50 border border-slate-700/50 rounded-xl p-4 flex items-center space-x-4 shadow-sm">
-                <div className="bg-red-500/10 p-3 rounded-lg text-red-400">
-                  <AlertCircle size={24} />
-                </div>
-                <div>
-                  <p className="text-sm text-slate-400 font-medium tracking-wide">Alertas Críticos</p>
-                  <h3 className="text-2xl font-bold text-red-400">
-                    {produtos.filter(p => p.est_minimo != null && p.quantidade <= p.est_minimo).length} <span className="text-sm font-normal text-slate-500 ml-1">produtos</span>
-                  </h3>
-                </div>
-              </div>
-
-              <div className="bg-slate-800/50 border border-slate-700/50 rounded-xl p-4 flex items-center space-x-4 shadow-sm">
-                <div className="bg-rose-500/10 p-3 rounded-lg text-rose-400">
-                  <ArrowDownRight size={24} />
-                </div>
-                <div className="overflow-hidden">
-                  <p className="text-sm text-slate-400 font-medium tracking-wide">Última Saída</p>
-                  <h3 className="text-base font-bold text-slate-200 truncate" title={(() => {
-                    const last = historico.find(m => m.tipo === 'saida');
-                    if (!last) return 'Nenhuma';
-                    const p = produtos.find(p => p.id === last.produto_id);
-                    return p ? p.nome : `ID: ${last.produto_id}`;
-                  })()}>
-                    {(() => {
-                      const last = historico.find(m => m.tipo === 'saida');
-                      if (!last) return 'Nenhuma';
-                      const p = produtos.find(p => p.id === last.produto_id);
-                      return p ? p.nome : `Produto Excluído`;
-                    })()}
-                  </h3>
-                </div>
-              </div>
-            </div>
-            
             {/* Relatório Button */}
             <div className="mb-6 flex justify-end">
               <button
@@ -782,15 +1066,15 @@ export default function App() {
               }
 
               return (
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
                   {filteredProdutos.map(produto => {
                     const isLowStock = produto.est_minimo != null && produto.quantidade <= produto.est_minimo;
                     return (
-                      <div key={produto.id} className={`bg-slate-800 rounded-xl border ${isLowStock ? 'border-red-500/50 hover:border-red-500/70' : 'border-slate-700/50 hover:border-slate-600'} p-6 flex flex-col transition-colors shadow-sm`}>
+                      <div key={produto.id} className={`bg-slate-800 rounded-xl border ${isLowStock ? 'border-red-500/50 hover:border-red-500/70' : 'border-slate-700/50 hover:border-slate-600'} p-4 flex flex-col transition-colors shadow-sm`}>
                         <div className="flex justify-between items-start mb-4">
                           <div>
                             <h3 className="text-lg font-medium text-slate-200 line-clamp-1 pr-2" title={produto.nome}>
-                              {produto.nome}
+                              <span className="text-slate-500 mr-2 text-sm">#{produtos.findIndex(p => p.id === produto.id) + 1}</span> {produto.nome}
                             </h3>
                             {produto.sku && (
                               <p className="text-xs text-slate-500 mt-1 font-mono">SKU: {produto.sku}</p>
@@ -817,7 +1101,7 @@ export default function App() {
                           </div>
                         </div>
                         
-                        <div className={`flex-1 flex flex-col justify-center items-center py-6 bg-slate-900/50 rounded-lg mb-4 border transition-all duration-300 ${isLowStock ? 'border-red-500/40 bg-red-500/5 drop-shadow-[0_0_12px_rgba(239,68,68,0.15)] shadow-[inset_0_0_20px_rgba(239,68,68,0.1)]' : 'border-slate-700/30'}`}>
+                        <div className={`flex-1 flex flex-col justify-center items-center py-4 bg-slate-900/50 rounded-lg mb-4 border transition-all duration-300 ${isLowStock ? 'border-red-500/40 bg-red-500/5 drop-shadow-[0_0_12px_rgba(239,68,68,0.15)] shadow-[inset_0_0_20px_rgba(239,68,68,0.1)]' : 'border-slate-700/30'}`}>
                           <span className={`text-sm tracking-wider uppercase font-semibold mb-1 ${isLowStock ? 'text-red-400' : 'text-slate-500'}`}>Saldo Atual</span>
                           <span className={`text-4xl font-bold transition-all duration-300 ${isLowStock ? 'text-red-500 drop-shadow-[0_0_8px_rgba(239,68,68,0.6)] animate-pulse' : 'text-sky-400'}`}>{produto.quantidade}</span>
                           {produto.est_minimo != null && (
@@ -850,6 +1134,27 @@ export default function App() {
           </>
         )}
       </main>
+
+      {isScannerOpen && (
+        <BarcodeScanner 
+          onClose={() => setIsScannerOpen(false)}
+          onScan={(decodedText) => {
+            setIsScannerOpen(false);
+            const foundProduct = produtos.find(p => p.sku === decodedText);
+            if (foundProduct) {
+              if (actionModal.isOpen) {
+                setActionModal({ ...actionModal, produto: foundProduct });
+                toast.success('Produto localizado pelo código de barras!');
+              } else {
+                setActionModal({ isOpen: true, type: 'saida', produto: foundProduct });
+                toast.success('Produto localizado pelo código de barras!');
+              }
+            } else {
+              toast.error(`Nenhum produto encontrado com o código: ${decodedText}`);
+            }
+          }}
+        />
+      )}
 
       {/* MODAL: Adicionar/Editar Produto */}
       {isAddModalOpen && (
@@ -939,9 +1244,10 @@ export default function App() {
                 </button>
                 <button 
                   type="submit" 
-                  className="flex-1 px-4 py-2.5 rounded-lg bg-sky-500 hover:bg-sky-400 text-slate-950 font-semibold transition-colors"
+                  disabled={isSubmitting}
+                  className="flex-1 px-4 py-2.5 rounded-lg bg-sky-500 hover:bg-sky-400 text-slate-950 font-semibold transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                  {editingProduto ? 'Salvar Alterações' : 'Cadastrar'}
+                  {isSubmitting ? 'Salvando...' : (editingProduto ? 'Salvar Alterações' : 'Cadastrar')}
                 </button>
               </div>
             </form>
@@ -968,7 +1274,16 @@ export default function App() {
             
             <form onSubmit={handleUpdateStock} className="p-6">
               <div className="mb-6">
-                <div className="text-sm text-slate-400 mb-1">Referência do Ativo</div>
+                <div className="flex items-center justify-between mb-1">
+                  <div className="text-sm text-slate-400">Referência do Ativo</div>
+                  <button
+                    type="button"
+                    onClick={() => setIsScannerOpen(true)}
+                    className="text-xs flex items-center gap-1 bg-sky-500/10 hover:bg-sky-500/20 text-sky-400 px-2 py-1 rounded transition-colors"
+                  >
+                    <Camera size={14} /> Escanear Código
+                  </button>
+                </div>
                 <div className="font-medium text-slate-200 text-lg bg-slate-900/50 p-3 rounded-lg border border-slate-700/50 line-clamp-1" title={actionModal.produto.nome}>
                   {actionModal.produto.nome}
                 </div>
@@ -1044,14 +1359,14 @@ export default function App() {
               <div className="flex gap-3 mt-8">
                 <button 
                   type="submit" 
-                  disabled={actionModal.type === 'saida' && (!selectedDestinoId || !selectedTecnicoId)}
+                  disabled={isSubmitting || (actionModal.type === 'saida' && (!selectedDestinoId || !selectedTecnicoId))}
                   className={`flex-1 px-4 py-3 rounded-lg font-semibold text-slate-950 transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
                     actionModal.type === 'entrada' 
                       ? 'bg-sky-500 hover:bg-sky-400 shadow-sm shadow-sky-500/20' 
                       : 'bg-rose-500 hover:bg-rose-400 shadow-sm shadow-rose-500/20'
                   }`}
                 >
-                  Confirmar {actionModal.type === 'entrada' ? 'Entrada' : 'Saída'}
+                  {isSubmitting ? 'Salvando...' : `Confirmar ${actionModal.type === 'entrada' ? 'Entrada' : 'Saída'}`}
                 </button>
               </div>
             </form>
