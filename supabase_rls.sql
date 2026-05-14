@@ -21,3 +21,20 @@ CREATE POLICY "Acesso total para aplicacao (anon e authenticated)" ON public.pro
 CREATE POLICY "Acesso total para aplicacao (anon e authenticated)" ON public.destinos FOR ALL USING (true) WITH CHECK (true);
 CREATE POLICY "Acesso total para aplicacao (anon e authenticated)" ON public.tecnicos FOR ALL USING (true) WITH CHECK (true);
 CREATE POLICY "Acesso total para aplicacao (anon e authenticated)" ON public.movimentacao_estoque FOR ALL USING (true) WITH CHECK (true);
+
+-- Tabela de Compras (Sugestoes de Reposicao)
+CREATE TABLE IF NOT EXISTS public.compras (
+  id uuid default gen_random_uuid() primary key,
+  produto_id text,
+  nome text not null,
+  quantidade numeric not null default 1,
+  status text not null default 'Pendente',
+  created_at timestamp with time zone default timezone('utc'::text, now()) not null
+);
+
+ALTER TABLE public.compras ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Permitir operações livres na tabela compras"
+ON public.compras
+FOR ALL
+USING (true)
+WITH CHECK (true);

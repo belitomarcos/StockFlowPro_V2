@@ -12,7 +12,7 @@ const supabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY || '';
 const supabase = supabaseUrl && supabaseKey ? createClient(supabaseUrl, supabaseKey) : null;
 
 type Produto = {
-  id: string | number;
+  id: string;
   nome: string;
   quantidade: number;
   sku?: string;
@@ -20,24 +20,24 @@ type Produto = {
 };
 
 type Destino = {
-  id: string | number;
+  id: string;
   nome: string;
 };
 
 type Tecnico = {
-  id: string | number;
+  id: string;
   nome: string;
 };
 
 type Movimentacao = {
   id: string | number;
-  produto_id: string | number;
+  produto_id: string;
   tipo: 'entrada' | 'saida';
   quantidade: number;
-  destino_id?: string | number;
-  tecnico_id?: string | number;
-  created_at?: string;
+  destino_id?: string;
+  tecnico_id?: string;
   data_movimentacao?: string;
+  created_at?: string;
   produtos?: { nome: string };
   destinos?: { nome: string };
   tecnicos?: { nome: string };
@@ -56,6 +56,7 @@ export default function App() {
   const [destinos, setDestinos] = useState<Destino[]>([]);
   const [tecnicos, setTecnicos] = useState<Tecnico[]>([]);
   const [historico, setHistorico] = useState<Movimentacao[]>([]);
+  const [ultimaSaida, setUltimaSaida] = useState<Movimentacao | null>(null);
   const [loading, setLoading] = useState(true);
   const [compras, setCompras] = useState<Compra[]>(() => {
     const saved = localStorage.getItem('@stockflowpro/compras');
@@ -75,8 +76,8 @@ export default function App() {
     thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
 
     const saidas = historico.filter(m => {
-      const dataMov = m.data_movimentacao || m.created_at;
-      return m.tipo === 'saida' && dataMov && new Date(dataMov) >= thirtyDaysAgo;
+      const dataMov = m.data_movimentacao || m.created_at || (m as any).data;
+      return m.tipo?.toLowerCase() === 'saida' && (!dataMov || new Date(dataMov) >= thirtyDaysAgo);
     });
     
     const aggregated: Record<string, number> = {};
@@ -99,8 +100,8 @@ export default function App() {
     thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
 
     const saidas = historico.filter(m => {
-      const dataMov = m.data_movimentacao || m.created_at;
-      return m.tipo === 'saida' && dataMov && new Date(dataMov) >= thirtyDaysAgo;
+      const dataMov = m.data_movimentacao || m.created_at || (m as any).data;
+      return m.tipo?.toLowerCase() === 'saida' && (!dataMov || new Date(dataMov) >= thirtyDaysAgo);
     });
     
     const aggregated: Record<string, number> = {};
@@ -135,79 +136,135 @@ export default function App() {
       return;
     }
     
-    const [resProdutos, resDestinos, resTecnicos, resHistorico] = await Promise.all([
-      supabase.from('produtos').select('*').order('nome'),
-      supabase.from('destinos').select('*').order('nome'),
-      supabase.from('tecnicos').select('*').order('nome'),
-      supabase.from('movimentacao_estoque').select('*, produtos(nome), tecnicos(nome), destinos(nome)').order('id', { ascending: false }).limit(100)
-    ]);
+    try {
+      // Use separate calls instead of Promise.all to isolate failures
+      const resProdutos = await supabase.from('produtos').select('*').order('nome');
+      const resDestinos = await supabase.from('destinos').select('*').order('nome');
+      const resTecnicos = await supabase.from('tecnicos').select('*').order('nome');
+      // Tentamos buscar todos os registros e ordenar manualmente no JS para garantir precisão máxima
+      const resHistorico = await supabase.from('movimentacao_estoque')
+        .select('*');
 
-    if (resProdutos.error) {
-      toast.error('Erro ao buscar produtos.');
-    } else {
-      setProdutos(resProdutos.data || []);
-    }
-    
-    if (resDestinos.data) {
-      setDestinos(resDestinos.data);
-    }
+      let sortedHistorico: Movimentacao[] = (resHistorico.data || []) as Movimentacao[];
+      
+      // Ordenação Obrigatória por Data Decrescente (Mais recente primeiro)
+      sortedHistorico.sort((a, b) => {
+        const dataA = new Date(a.data_movimentacao || a.created_at || (a as any).data || 0).getTime();
+        const dataB = new Date(b.data_movimentacao || b.created_at || (b as any).data || 0).getTime();
+        return dataB - dataA;
+      });
 
-    if (resTecnicos.data) {
-      setTecnicos(resTecnicos.data);
-    }
+      if (sortedHistorico.length > 0) {
+        console.log('ESTRUTURA REAL (Historico):', sortedHistorico[0]);
+      }
 
-    if (resHistorico && !resHistorico.error && resHistorico.data) {
-      setHistorico(resHistorico.data);
-    }
+      // Captura da Última Saída: O card 'Última Saída' deve ser o primeiro item do tipo saida após a ordenação
+      const todasSaidas = sortedHistorico.filter((m) => m.tipo?.toLowerCase() === 'saida');
+      if (todasSaidas.length > 0) {
+        setUltimaSaida(todasSaidas[0]);
+      } else {
+        setUltimaSaida(null);
+      }
 
-    setLoading(false);
+      if (resProdutos.error) {
+        console.error('ERRO SUPABASE (Produtos):', resProdutos.error);
+        toast.error('Erro ao carregar lista de produtos.');
+      } else {
+        setProdutos(resProdutos.data || []);
+      }
+      
+      if (resDestinos.error) {
+        console.error('ERRO SUPABASE (Destinos):', resDestinos.error);
+      } else {
+        setDestinos(resDestinos.data || []);
+      }
+
+      if (resTecnicos.error) {
+        console.error('ERRO SUPABASE (Tecnicos):', resTecnicos.error);
+      } else {
+        setTecnicos(resTecnicos.data || []);
+      }
+
+      if (resHistorico.error) {
+        console.error('ERRO SUPABASE (Historico):', resHistorico.error);
+        if (resHistorico.error.code !== 'PGRST116') {
+          toast.error('Erro ao carregar histórico de movimentações.');
+        }
+      } else {
+        setHistorico(sortedHistorico);
+      }
+    } catch (err) {
+      console.error('Erro Crítico no fetchData:', err);
+      toast.error('Erro de conexão com o banco de dados.');
+    } finally {
+      setLoading(false);
+    }
   };
-
-  useEffect(() => {
-    fetchData();
-  }, []);
 
   useEffect(() => {
     localStorage.setItem('@stockflowpro/compras', JSON.stringify(compras));
   }, [compras]);
 
-  const gerarSugestoesCompras = () => {
-    const produtosParaReposicao = produtos.filter(p => p.est_minimo != null && p.quantidade <= p.est_minimo);
+  useEffect(() => {
+    fetchData();
+  }, [supabaseUrl, supabaseKey]);
+
+  const gerarSugestoesCompras = async () => {
+    // Mostra um feedback imediato e limpa busca local para evitar conflitos visuais
+    setIsSubmitting(true);
     
-    setCompras(prev => {
-      const novas = [...prev];
-      let added = 0;
-      
+    // Filtra produtos onde quantidade <= est_minimo
+    const produtosParaReposicao = produtos.filter(p => p.est_minimo != null && Number(p.quantidade) <= Number(p.est_minimo));
+    
+    let added = 0;
+    const novasSugestoes: Compra[] = [];
+    
+    try {
       for (const p of produtosParaReposicao) {
-        // Verifica se já existe compra não entregue para este produto
-        const jaExiste = novas.some(c => c.produto_id === String(p.id) && c.status !== 'Entregue');
+        // Verifica se já existe uma sugestão pendente para este produto no estado atual
+        const jaExiste = compras.some(c => String(c.produto_id) === String(p.id) && c.status !== 'Entregue');
+        
         if (!jaExiste) {
-          const sugestaoAuto = (p.est_minimo || 0) * 2 - p.quantidade;
-          novas.push({
+          const estMin = Number(p.est_minimo) || 0;
+          const qtdAtual = Number(p.quantidade);
+          const sugestaoAuto = (estMin * 2) - qtdAtual;
+          
+          const payload: Compra = {
             id: crypto.randomUUID(),
             produto_id: String(p.id),
             nome: p.nome,
-            quantidade: sugestaoAuto > 0 ? sugestaoAuto : 1,
+            quantidade: (sugestaoAuto > 0 ? sugestaoAuto : 1),
             status: 'Pendente'
-          });
+          };
+          
+          novasSugestoes.push(payload);
           added++;
         }
       }
       
       if (added > 0) {
+        setCompras(prev => [...novasSugestoes, ...prev]);
         toast.success(`${added} nova(s) sugestão(ões) adicionada(s)!`);
       } else {
-        toast.info('Nenhuma nova sugestão no momento.');
+        toast.info('Tudo em dia! Nenhuma nova sugestão necessária.');
       }
-      
-      return novas;
-    });
+    } catch (err) {
+      console.error('Erro na geração automática:', err);
+      toast.error('Erro ao gerar sugestões automáticas.');
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
-  const handleExcluir = async (id: string | number) => {
+  const handleExcluir = async (id: string) => {
     if (!supabase) return;
-    const { error } = await supabase.from('produtos').delete().eq('id', id);
+    
+    const confirmacao = window.confirm("Tem certeza que deseja excluir permanentemente este ativo? Esta ação não pode ser desfeita.");
+    if (!confirmacao) return;
+
+    const { error } = await supabase.from('produtos').delete().eq('id', String(id));
     if (error) {
+      console.error('ERRO SUPABASE (Delete Produto):', error);
       toast.error('Erro ao excluir produto.');
     } else {
       toast.success('Produto removido do sistema.');
@@ -218,6 +275,7 @@ export default function App() {
   const handleAddProduto = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     const formData = new FormData(e.currentTarget);
+    const id = formData.get('id') as string;
     const nome = formData.get('nome') as string;
     const quantidade = Number(formData.get('quantidade'));
 
@@ -230,43 +288,55 @@ export default function App() {
     setIsSubmitting(true);
     
     try {
-      const nomeFormatado = nome.trim().toLowerCase();
-      const produtoExistente = produtos.find(p => p.nome.trim().toLowerCase() === nomeFormatado && (!editingProduto || p.id !== editingProduto.id));
-      
-      if (produtoExistente) {
-        toast.error('Este produto já está cadastrado!');
-        return;
-      }
+      if (id) {
+        const targetId = String(id); // Strict UUID string from form name="id"
+        console.log('ID enviado (Produto):', targetId);
+        
+        const payload = { 
+          nome, 
+          sku: formData.get('sku') ? String(formData.get('sku')) : null, 
+          est_minimo: formData.get('est_minimo') ? Number(formData.get('est_minimo')) : null, 
+          quantidade: Number(quantidade) 
+        };
 
-      const payload = {
-        nome, 
-        quantidade,
-        sku: formData.get('sku') ? String(formData.get('sku')) : null,
-        est_minimo: formData.get('est_minimo') ? Number(formData.get('est_minimo')) : null
-      };
+        console.log('Payload de Update (Produtos):', payload);
 
-      if (editingProduto) {
-        const { error } = await supabase.from('produtos').update(payload).eq('id', editingProduto.id);
+        const { error } = await supabase
+          .from('produtos')
+          .update(payload)
+          .eq('id', String(targetId));
+
         if (error) {
+          console.error('ERRO SUPABASE (Update Produto):', error);
+          alert(JSON.stringify(error));
           toast.error('Erro ao atualizar produto.');
-          console.error(error);
         } else {
-          toast.success('Produto atualizado com sucesso!');
+          toast.success('Produto atualizado!');
           setEditingProduto(null);
           setIsAddModalOpen(false);
-          fetchData();
+          await fetchData();
         }
       } else {
-        const { error } = await supabase.from('produtos').insert([payload]);
+        const { error } = await supabase.from('produtos').insert([{
+          nome,
+          sku: formData.get('sku') ? String(formData.get('sku')) : null,
+          est_minimo: formData.get('est_minimo') ? Number(formData.get('est_minimo')) : null,
+          quantidade: Number(quantidade)
+        }]);
+
         if (error) {
+          console.error('Erro Supabase (Insert Produto):', error);
+          alert(`Erro ao cadastrar: ${error.message}`);
           toast.error('Erro ao cadastrar produto.');
-          console.error(error);
         } else {
-          toast.success('Produto cadastrado com sucesso!');
+          toast.success('Produto cadastrado!');
           setIsAddModalOpen(false);
-          fetchData();
+          await fetchData();
         }
       }
+    } catch (err: any) {
+      console.error('Erro de Processamento:', err);
+      alert(`Erro inesperado no sistema: ${err.message}`);
     } finally {
       setIsSubmitting(false);
     }
@@ -309,27 +379,32 @@ export default function App() {
     setIsSubmitting(true);
     
     try {
+      const produtoId = String(actionModal.produto?.id);
+      console.log('ID enviado (Estoque Update):', produtoId);
+      if (!produtoId || produtoId === 'undefined') {
+        alert('Erro: ID do produto não validado para operação.');
+        return;
+      }
+
       const { error } = await supabase
         .from('produtos')
-        .update({ quantidade: nova_quantidade })
-        .eq('id', actionModal.produto.id);
+        .update({ quantidade: Number(nova_quantidade) })
+        .eq('id', String(produtoId));
 
       if (error) {
-        toast.error(`Erro ao registrar ${actionModal.type}.`);
-        console.error(error);
+        console.error('ERRO SUPABASE (Update Estoque):', error);
+        toast.error(`Erro ao atualizar saldo: ${error.message}`);
       } else {
         // Salva cada operação na tabela movimentacao_estoque
-        const payload: any = {
-          produto_id: actionModal.produto.id,
-          tipo: actionModal.type,
-          quantidade: quantidade_digitada,
-          data_movimentacao: new Date().toISOString()
+        const payload = {
+          produto_id: String(produtoId),
+          tipo: String(actionModal.type),
+          quantidade: Number(quantidade_digitada),
+          destino_id: actionModal.type === 'saida' ? String(selectedDestinoId) : null,
+          tecnico_id: actionModal.type === 'saida' ? String(selectedTecnicoId) : null
         };
 
-        if (actionModal.type === 'saida') {
-          payload.destino_id = selectedDestinoId;
-          payload.tecnico_id = selectedTecnicoId;
-        }
+        console.log('Inserindo Movimentação:', payload);
 
         const { error: historyError } = await supabase
           .from('movimentacao_estoque')
@@ -369,11 +444,18 @@ export default function App() {
     }
   };
 
-  const handleExcluirDestino = async (id: string | number) => {
+  const handleExcluirDestino = async (id: string) => {
     if (!supabase) return;
-    const { error } = await supabase.from('destinos').delete().eq('id', id);
-    if (error) toast.error('Erro ao excluir destino.');
-    else {
+
+    const confirmacao = window.confirm("Excluir este destino? Movimentações antigas que referenciam este destino podem ficar sem nome.");
+    if (!confirmacao) return;
+
+    const { error } = await supabase.from('destinos').delete().eq('id', String(id));
+    if (error) {
+      console.error('ERRO SUPABASE (Delete Destino):', error);
+      alert(JSON.stringify(error));
+      toast.error('Erro ao excluir destino.');
+    } else {
       toast.success('Destino removido.');
       fetchData();
     }
@@ -389,19 +471,29 @@ export default function App() {
     if (!nome.trim()) return toast.error('Nome do técnico inválido.');
     
     const { error } = await supabase.from('tecnicos').insert([{ nome }]);
-    if (error) toast.error('Erro ao cadastrar técnico.');
-    else {
+    if (error) {
+      console.error('ERRO SUPABASE (Insert Tecnico):', error);
+      alert(JSON.stringify(error));
+      toast.error('Erro ao cadastrar técnico.');
+    } else {
       toast.success('Técnico cadastrado.');
       form.reset();
       fetchData();
     }
   };
 
-  const handleExcluirTecnico = async (id: string | number) => {
+  const handleExcluirTecnico = async (id: string) => {
     if (!supabase) return;
-    const { error } = await supabase.from('tecnicos').delete().eq('id', id);
-    if (error) toast.error('Erro ao excluir técnico.');
-    else {
+
+    const confirmacao = window.confirm("Excluir este técnico? Movimentações antigas que referenciam este técnico podem ficar sem nome.");
+    if (!confirmacao) return;
+
+    const { error } = await supabase.from('tecnicos').delete().eq('id', String(id));
+    if (error) {
+       console.error('ERRO SUPABASE (Delete Tecnico):', error);
+       alert(JSON.stringify(error));
+       toast.error('Erro ao excluir técnico.');
+    } else {
       toast.success('Técnico removido.');
       fetchData();
     }
@@ -409,6 +501,10 @@ export default function App() {
 
   const handleRemoveDuplicates = async () => {
     if (!supabase) return;
+
+    const confirmacao = window.confirm("Deseja iniciar a limpeza de duplicados? O sistema irá fundir itens com nomes idênticos e somar seus estoques. Esta ação é irreversível.");
+    if (!confirmacao) return;
+
     setIsRemovingDuplicates(true);
     try {
       const { data: allProducts, error } = await supabase.from('produtos').select('*');
@@ -446,15 +542,18 @@ export default function App() {
 
           // Update main item quantity if any
           if (quantityToAdd > 0) {
-            await supabase.from('produtos').update({ quantidade: keep.quantidade + quantityToAdd }).eq('id', keep.id);
+            const { error: updateError } = await supabase.from('produtos').update({ quantidade: keep.quantidade + quantityToAdd }).eq('id', String(keep.id));
+            if (updateError) console.error('Erro ao atualizar saldo do item principal:', updateError);
           }
 
           // Reassign history and delete duplicates
           if (idsToDelete.length > 0) {
             for (const dupId of idsToDelete) {
-               await supabase.from('movimentacao_estoque').update({ produto_id: keep.id }).eq('produto_id', dupId);
+               const { error: moveError } = await supabase.from('movimentacao_estoque').update({ produto_id: keep.id }).eq('produto_id', String(dupId));
+               if (moveError) console.error(`Erro ao transferir histórico do ID ${dupId}:`, moveError);
             }
-            await supabase.from('produtos').delete().in('id', idsToDelete);
+            const { error: deleteError } = await supabase.from('produtos').delete().in('id', idsToDelete);
+            if (deleteError) console.error('Erro ao excluir duplicados:', deleteError);
             removedCount += idsToDelete.length;
           }
         }
@@ -528,7 +627,7 @@ export default function App() {
       
       {/* Navbar Superior */}
       <header className="border-b border-slate-800 bg-slate-900/50 backdrop-blur-sm sticky top-0 z-10">
-        <div className="max-w-full mx-auto px-6 h-16 flex items-center justify-between">
+        <div className="w-full px-6 h-16 flex items-center justify-between">
           <div className="flex items-center space-x-3">
             <div className="bg-sky-500/10 p-2 rounded-lg text-sky-400">
               <Server size={24} />
@@ -604,7 +703,7 @@ export default function App() {
       </header>
 
       {/* Conteúdo Principal */}
-      <main className="max-w-full mx-auto px-6 py-8 print:p-0 print:m-0 print:max-w-none">
+      <main className="w-full px-6 py-8 print:p-0 print:m-0">
         {activeTab === 'dashboard' ? (
           <div className="space-y-6">
             {/* Dashboard Cards de Resumo */}
@@ -640,16 +739,14 @@ export default function App() {
                 <div className="overflow-hidden">
                   <p className="text-sm text-slate-400 font-medium tracking-wide">Última Saída</p>
                   <h3 className="text-base font-bold text-slate-200 truncate" title={(() => {
-                    const last = historico.find(m => m.tipo === 'saida');
-                    if (!last) return 'Nenhuma';
-                    const p = produtos.find(p => p.id === last.produto_id);
-                    return p ? p.nome : `ID: ${last.produto_id}`;
+                    if (!ultimaSaida) return 'Nenhuma';
+                    const p = produtos.find(p => p.id === ultimaSaida.produto_id);
+                    return p ? p.nome : (ultimaSaida.produtos?.nome || `ID: ${ultimaSaida.produto_id}`);
                   })()}>
                     {(() => {
-                      const last = historico.find(m => m.tipo === 'saida');
-                      if (!last) return 'Nenhuma';
-                      const p = produtos.find(p => p.id === last.produto_id);
-                      return p ? p.nome : `Produto Excluído`;
+                      if (!ultimaSaida) return 'Nenhuma';
+                      const p = produtos.find(p => p.id === ultimaSaida.produto_id);
+                      return p ? p.nome : (ultimaSaida.produtos?.nome || `Produto Excluído`);
                     })()}
                   </h3>
                 </div>
@@ -665,9 +762,9 @@ export default function App() {
                   </div>
                   <h2 className="text-lg font-semibold text-slate-200">Top 5 Produtos em Saída (30 dias)</h2>
                 </div>
-                {topSaidasData.length > 0 ? (
-                  <div className="h-64 w-full">
-                    <ResponsiveContainer width="100%" height="100%">
+                {topSaidasData.length > 0 && topSaidasData.some(d => d.quantidade > 0) ? (
+                  <div className="h-64 w-full" style={{ minHeight: '300px' }}>
+                    <ResponsiveContainer width="100%" height={300}>
                       <BarChart data={topSaidasData} layout="vertical" margin={{ top: 5, right: 30, left: 20, bottom: 5 }}>
                         <CartesianGrid strokeDasharray="3 3" stroke="#334155" horizontal={true} vertical={false} />
                         <XAxis type="number" stroke="#94a3b8" />
@@ -697,9 +794,9 @@ export default function App() {
                   </div>
                   <h2 className="text-lg font-semibold text-slate-200">Distribuição de Saídas (30 dias)</h2>
                 </div>
-                {saidasPorDestinoData.length > 0 ? (
-                  <div className="h-64 w-full">
-                    <ResponsiveContainer width="100%" height="100%">
+                {saidasPorDestinoData.length > 0 && saidasPorDestinoData.some(d => d.value > 0) ? (
+                  <div className="h-64 w-full" style={{ minHeight: '300px' }}>
+                    <ResponsiveContainer width="100%" height={300}>
                       <PieChart>
                         <Pie
                           data={saidasPorDestinoData}
@@ -810,7 +907,12 @@ export default function App() {
                                 <Edit2 size={16} />
                               </button>
                               <button 
-                                onClick={() => setCompras(prev => prev.filter(c => c.id !== compra.id))}
+                                onClick={() => {
+                                  if (window.confirm("Remover esta sugestão da lista de compras?")) {
+                                    setCompras(prev => prev.filter(c => c.id !== compra.id));
+                                    toast.success('Sugestão removida.');
+                                  }
+                                }}
                                 className="p-1.5 text-slate-400 hover:text-red-400 hover:bg-red-500/10 rounded-md transition-colors"
                                 title="Excluir"
                               >
@@ -837,8 +939,8 @@ export default function App() {
                   </div>
                   <h2 className="text-lg font-semibold text-slate-200">Top Saídas (Últimos 30 dias)</h2>
                 </div>
-                <div className="h-64 w-full">
-                  <ResponsiveContainer width="100%" height="100%">
+                <div className="h-64 w-full" style={{ minHeight: '300px' }}>
+                  <ResponsiveContainer width="100%" height={300}>
                     <BarChart data={topSaidasData} layout="vertical" margin={{ top: 5, right: 30, left: 20, bottom: 5 }}>
                       <CartesianGrid strokeDasharray="3 3" stroke="#334155" horizontal={true} vertical={false} />
                       <XAxis type="number" stroke="#94a3b8" />
@@ -888,8 +990,8 @@ export default function App() {
                     const destinoNome = mov.destinos?.nome || destinos.find(d => String(d.id) === String(mov.destino_id))?.nome;
                     const tecnicoNome = mov.tecnicos?.nome || tecnicos.find(t => String(t.id) === String(mov.tecnico_id))?.nome;
                     
-                    const dataMov = mov.data_movimentacao || mov.created_at;
-                    let dataFormatada = new Date().toLocaleString('pt-BR');
+                    const dataMov = mov.data_movimentacao || mov.created_at || (mov as any).data;
+                    let dataFormatada = 'Data Indisponível';
                     if (dataMov) {
                       dataFormatada = new Date(dataMov).toLocaleString('pt-BR');
                     }
@@ -898,7 +1000,7 @@ export default function App() {
                       <tr key={mov.id} className="border-b border-slate-800/50 hover:bg-slate-800/30 transition-colors">
                         <td className="py-4 px-4 text-slate-300 text-sm whitespace-nowrap">{dataFormatada}</td>
                         <td className="py-4 px-4">
-                          {mov.tipo === 'entrada' ? (
+                          {mov.tipo?.toLowerCase() === 'entrada' ? (
                             <span className="inline-flex items-center gap-1.5 text-emerald-400 bg-emerald-400/10 border border-emerald-400/20 px-2.5 py-1 rounded-md text-xs font-semibold">
                               <ArrowUpRight size={14} /> Entrada
                             </span>
@@ -949,6 +1051,7 @@ export default function App() {
               
               <form onSubmit={handleAddTecnico} className="flex gap-2 mb-6">
                 <input 
+                  id="tecnico_nome"
                   name="nome"
                   type="text"
                   placeholder="Nome do técnico"
@@ -987,6 +1090,7 @@ export default function App() {
               
               <form onSubmit={handleAddDestino} className="flex gap-2 mb-6">
                 <input 
+                  id="destino_nome"
                   name="nome"
                   type="text"
                   placeholder="Nome do destino"
@@ -1215,6 +1319,7 @@ export default function App() {
               </button>
             </div>
             <form onSubmit={handleAddProduto} className="p-6 space-y-5">
+              <input type="hidden" name="id" defaultValue={editingProduto?.id || ''} />
               <div>
                 <label className="block text-sm font-medium text-slate-400 mb-1.5" htmlFor="nome">
                   Nome do Ativo
@@ -1231,15 +1336,14 @@ export default function App() {
                 />
               </div>
               <div>
-                <label className="block text-sm font-medium text-slate-400 mb-1.5" htmlFor="quantidade">
+                <label className="block text-sm font-medium text-slate-400 mb-1.5" htmlFor="edit-quantidade">
                   Quantidade Pró-forma
                 </label>
                 <input 
-                  id="quantidade"
+                  id="edit-quantidade"
                   name="quantidade"
                   type="number"
                   required
-                  readOnly={!!editingProduto}
                   defaultValue={editingProduto?.quantidade ?? 0}
                   className="w-full bg-slate-900 border border-slate-700 rounded-lg px-4 py-2.5 text-slate-200 placeholder:text-slate-600 focus:outline-none focus:border-sky-500 focus:ring-1 focus:ring-sky-500 transition-all font-mono"
                 />
@@ -1428,27 +1532,32 @@ export default function App() {
                 <X size={20} />
               </button>
             </div>
-            <form onSubmit={(e) => {
+            <form onSubmit={async (e) => {
               e.preventDefault();
               const formData = new FormData(e.currentTarget);
+              const id = String(formData.get('id'));
               const nome = String(formData.get('nome'));
               const quantidade = Number(formData.get('quantidade'));
               const status = String(formData.get('status')) as 'Pendente' | 'Pedido Feito' | 'Entregue';
 
-              if (editingCompra) {
-                setCompras(prev => prev.map(c => c.id === editingCompra.id ? { ...c, nome, quantidade, status } : c));
+              if (id) {
+                setCompras(prev => prev.map(c => c.id === id ? { ...c, nome, quantidade, status } : c));
                 toast.success('Sugestão atualizada!');
               } else {
-                setCompras(prev => [...prev, {
+                const nova = {
                   id: crypto.randomUUID(),
                   nome,
                   quantidade,
-                  status
-                }]);
+                  status,
+                  produto_id: null
+                };
+                setCompras(prev => [nova, ...prev]);
                 toast.success('Sugestão adicionada!');
               }
               setIsCompraModalOpen(false);
+              setEditingCompra(null);
             }} className="p-6">
+              <input type="hidden" name="id" defaultValue={editingCompra?.id || ''} />
               <div className="space-y-4 mb-6">
                 <div>
                   <label className="block text-sm font-medium text-slate-400 mb-1.5" htmlFor="nome_compra">

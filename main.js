@@ -18,6 +18,7 @@ function createWindow() {
   const win = new BrowserWindow({
     width: 1200,
     height: 800,
+    title: "StockFlowPro V2.0",
     webPreferences: {
       nodeIntegration: true,
       contextIsolation: false
@@ -34,7 +35,8 @@ function createWindow() {
   if (app.isPackaged) {
     win.loadFile(path.join(__dirname, 'dist', 'index.html'));
   } else {
-    win.loadURL('http://localhost:3000');
+    win.loadURL('http://localhost:5173');
+    win.setTitle("StockFlowPro V2.0");
   }
 }
 
