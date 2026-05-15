@@ -235,6 +235,22 @@ export default function App() {
     fetchData();
   }, [supabaseUrl, supabaseKey]);
 
+  useEffect(() => {
+    if (!supabase) return;
+
+    const channel = supabase
+      .channel('schema-db-changes')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'produtos' }, () => fetchData())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'destinos' }, () => fetchData())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'tecnicos' }, () => fetchData())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'movimentacao_estoque' }, () => fetchData())
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [supabase]);
+
   const gerarSugestoesCompras = async () => {
     // Mostra um feedback imediato e limpa busca local para evitar conflitos visuais
     setIsSubmitting(true);
@@ -288,13 +304,23 @@ export default function App() {
     const confirmacao = window.confirm("Tem certeza que deseja excluir permanentemente este ativo? Esta ação não pode ser desfeita.");
     if (!confirmacao) return;
 
-    const { error } = await supabase.from('produtos').delete().eq('id', String(id));
-    if (error) {
-      console.error('ERRO SUPABASE (Delete Produto):', error);
-      toast.error('Erro ao excluir produto.');
-    } else {
-      toast.success('Produto removido do sistema.');
-      fetchData();
+    setIsSubmitting(true);
+    try {
+      const { error } = await supabase.from('produtos').delete().eq('id', String(id));
+      if (error) {
+        console.error('ERRO SUPABASE (Delete Produto):', error);
+        toast.error('Erro ao excluir produto.');
+      } else {
+        toast.success('Produto removido do sistema.');
+        setEditingProduto(null);
+        setIsAddModalOpen(false);
+        await fetchData();
+      }
+    } catch (err) {
+      console.error('Erro na exclusão:', err);
+      toast.error('Falha na comunicação com o servidor.');
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -480,14 +506,21 @@ export default function App() {
     const confirmacao = window.confirm("Excluir este destino? Movimentações antigas que referenciam este destino podem ficar sem nome.");
     if (!confirmacao) return;
 
-    const { error } = await supabase.from('destinos').delete().eq('id', String(id));
-    if (error) {
-      console.error('ERRO SUPABASE (Delete Destino):', error);
-      alert(JSON.stringify(error));
-      toast.error('Erro ao excluir destino.');
-    } else {
-      toast.success('Destino removido.');
-      fetchData();
+    setIsSubmitting(true);
+    try {
+      const { error } = await supabase.from('destinos').delete().eq('id', String(id));
+      if (error) {
+        console.error('ERRO SUPABASE (Delete Destino):', error);
+        alert(JSON.stringify(error));
+        toast.error('Erro ao excluir destino.');
+      } else {
+        toast.success('Destino removido.');
+        await fetchData();
+      }
+    } catch (err) {
+      console.error('Erro na exclusão do destino:', err);
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -518,14 +551,21 @@ export default function App() {
     const confirmacao = window.confirm("Excluir este técnico? Movimentações antigas que referenciam este técnico podem ficar sem nome.");
     if (!confirmacao) return;
 
-    const { error } = await supabase.from('tecnicos').delete().eq('id', String(id));
-    if (error) {
-       console.error('ERRO SUPABASE (Delete Tecnico):', error);
-       alert(JSON.stringify(error));
-       toast.error('Erro ao excluir técnico.');
-    } else {
-      toast.success('Técnico removido.');
-      fetchData();
+    setIsSubmitting(true);
+    try {
+      const { error } = await supabase.from('tecnicos').delete().eq('id', String(id));
+      if (error) {
+         console.error('ERRO SUPABASE (Delete Tecnico):', error);
+         alert(JSON.stringify(error));
+         toast.error('Erro ao excluir técnico.');
+      } else {
+        toast.success('Técnico removido.');
+        await fetchData();
+      }
+    } catch (err) {
+      console.error('Erro na exclusão do técnico:', err);
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
