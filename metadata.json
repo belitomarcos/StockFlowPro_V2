@@ -1,6 +1,6 @@
 {
-  "name": "StockFlowPro V2.0",
-  "description": "Sistema Pessoal de Gestão de Ativos de TI",
-  "requestFramePermissions": [],
+  "name": "StockFlowPro V2.1",
+  "description": "Sistema Executivo de Gestão de Fluxo de Estoque e Ativos de TI",
+  "requestFramePermissions": ["camera"],
   "majorCapabilities": []
 }

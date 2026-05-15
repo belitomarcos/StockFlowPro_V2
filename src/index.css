@@ -1,13 +1,28 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap');
 @import "tailwindcss";
 
 @theme {
-  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-inter: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-outfit: "Outfit", sans-serif;
+  
+  --radius-executive: 24px;
 }
 
 body {
+  background-color: #020617; /* Slate 950 */
+  color: #f8fafc;
+  font-family: var(--font-inter);
+}
+
+h1, h2, h3, h4, h5, h6 {
+  font-family: var(--font-outfit);
+}
+
+.card-executive {
   background-color: #0f172a; /* Slate 900 */
-  color: #f8fafc; /* Slate 50 */
+  border-radius: var(--radius-executive);
+  border: 1px solid #1e293b; /* Slate 800 */
+  box-shadow: 0 10px 30px -5px rgba(0, 0, 0, 0.4);
 }
 
 @media print {
