@@ -304,12 +304,17 @@ export default function App() {
     const confirmacao = window.confirm("Tem certeza que deseja excluir permanentemente este ativo? Esta ação não pode ser desfeita.");
     if (!confirmacao) return;
 
+    // Optimistic Update
+    const previousProdutos = [...produtos];
+    setProdutos(prev => prev.filter(p => p.id !== id));
+
     setIsSubmitting(true);
     try {
       const { error } = await supabase.from('produtos').delete().eq('id', String(id));
       if (error) {
         console.error('ERRO SUPABASE (Delete Produto):', error);
         toast.error('Erro ao excluir produto.');
+        setProdutos(previousProdutos); // Revert on error
       } else {
         toast.success('Produto removido do sistema.');
         setEditingProduto(null);
@@ -319,6 +324,7 @@ export default function App() {
     } catch (err) {
       console.error('Erro na exclusão:', err);
       toast.error('Falha na comunicação com o servidor.');
+      setProdutos(previousProdutos); // Revert on error
     } finally {
       setIsSubmitting(false);
     }
@@ -506,19 +512,27 @@ export default function App() {
     const confirmacao = window.confirm("Excluir este destino? Movimentações antigas que referenciam este destino podem ficar sem nome.");
     if (!confirmacao) return;
 
+    // Optimistic Update
+    const previousDestinos = [...destinos];
+    setDestinos(prev => prev.filter(d => d.id !== id));
+
     setIsSubmitting(true);
     try {
       const { error } = await supabase.from('destinos').delete().eq('id', String(id));
       if (error) {
         console.error('ERRO SUPABASE (Delete Destino):', error);
-        alert(JSON.stringify(error));
         toast.error('Erro ao excluir destino.');
+        setDestinos(previousDestinos); // Revert
       } else {
         toast.success('Destino removido.');
+        // Reset inputs to ensure form is ready
+        const input = document.getElementById('destino_nome') as HTMLInputElement;
+        if (input) input.value = '';
         await fetchData();
       }
     } catch (err) {
       console.error('Erro na exclusão do destino:', err);
+      setDestinos(previousDestinos); // Revert
     } finally {
       setIsSubmitting(false);
     }
@@ -551,19 +565,27 @@ export default function App() {
     const confirmacao = window.confirm("Excluir este técnico? Movimentações antigas que referenciam este técnico podem ficar sem nome.");
     if (!confirmacao) return;
 
+    // Optimistic Update
+    const previousTecnicos = [...tecnicos];
+    setTecnicos(prev => prev.filter(t => t.id !== id));
+
     setIsSubmitting(true);
     try {
       const { error } = await supabase.from('tecnicos').delete().eq('id', String(id));
       if (error) {
          console.error('ERRO SUPABASE (Delete Tecnico):', error);
-         alert(JSON.stringify(error));
          toast.error('Erro ao excluir técnico.');
+         setTecnicos(previousTecnicos); // Revert
       } else {
         toast.success('Técnico removido.');
+        // Reset inputs to ensure form is ready
+        const input = document.getElementById('tecnico_nome') as HTMLInputElement;
+        if (input) input.value = '';
         await fetchData();
       }
     } catch (err) {
       console.error('Erro na exclusão do técnico:', err);
+      setTecnicos(previousTecnicos); // Revert
     } finally {
       setIsSubmitting(false);
     }
